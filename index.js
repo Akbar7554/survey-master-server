@@ -3,6 +3,8 @@ const app = express()
 const cors = require('cors')
 const jwt = require('jsonwebtoken')
 require('dotenv').config()
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
+
 
 const port = process.env.PORT || 5000
 
@@ -25,10 +27,12 @@ const client = new MongoClient(uri, {
 async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
-        // await client.connect();
+        await client.connect();
 
         const userCollection = client.db("surveyDB").collection("users")
         const surveyCollection = client.db("surveyDB").collection("survey")
+        const paymentCartCollection = client.db("surveyDB").collection("paymentCart")
+        const paymentInfoCartCollection = client.db("surveyDB").collection("paymentInfo")
 
         // jwt api
         app.post('/jwt', async (req, res) => {
@@ -89,6 +93,11 @@ async function run() {
 
         app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
             const result = await userCollection.find().toArray()
+            res.send(result)
+        })
+
+        app.get('/proUsers', verifyToken, verifyAdmin, async (req, res) => {
+            const result = await paymentInfoCartCollection.find().toArray()
             res.send(result)
         })
 
@@ -222,6 +231,56 @@ async function run() {
             res.send(result)
         })
 
+        // payment Cart
+
+        app.get('/paymentCart', async (req, res) => {
+            const result = await paymentCartCollection.find().toArray()
+            console.log(result);
+            res.send(result)
+        })
+
+
+        // payment intent
+        app.post('/create-payment-intent', async (req, res) => {
+            const { price } = req.body
+            const amount = parseInt(price * 100)
+
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: amount,
+                currency: 'usd',
+                payment_method_types: ['card'],
+                
+
+            })
+            res.send({
+                clientSecret: paymentIntent.client_secret
+            })
+        })
+
+        app.get('/payments/:email', verifyToken, async (req, res) => {
+            const query = { email: req.params.email }
+            if (req.params.email !== req.decoded.email) {
+                return res.status(403).send({ message: "forbidden access" })
+            }
+            const result = await paymentInfoCartCollection.find(query).toArray()
+            res.send(result)
+        })
+
+        app.post('/payments', async (req, res) => {
+            const payment = req.body
+            const paymentResult = await paymentInfoCartCollection.insertOne(payment)
+            console.log('payment Info', payment)
+            const query = {
+                _id: {
+                    $in: payment.cartIds.map(id => new ObjectId(id))
+                }
+            }
+            const deleteResult = await cartCollection.deleteMany(query)
+            res.send({ paymentResult, deleteResult })
+
+        })
+        
+
 
 
 
@@ -230,8 +289,8 @@ async function run() {
 
 
         // Send a ping to confirm a successful connection
-        // await client.db("admin").command({ ping: 1 });
-        // console.log("Pinged your deployment. You successfully connected to MongoDB!");
+        await client.db("admin").command({ ping: 1 });
+        console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
         // Ensures that the client will close when you finish/error
         // await client.close();
